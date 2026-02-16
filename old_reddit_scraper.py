@@ -22,7 +22,7 @@ from nltk.corpus import stopwords
 from tqdm import tqdm
 import nltk
 
-# One-time downloads (safe if already downloaded)
+# One-time downloads
 import nltk
 
 try:
@@ -46,7 +46,7 @@ HEADERS = {'User-Agent': 'DSCI560_Lab5_Scraper (Educational Project)'}
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-# DATABASE
+#db
 
 def get_db_conn(host, user, password, database='lab5_reddit'):
     conn = psycopg2.connect(
@@ -195,7 +195,7 @@ def scrape_subreddit(subreddit, max_posts):
 
     return posts
 
-# IMAGE OCR
+#image ocr for posts with images
 
 def ocr_image(url):
     try:
@@ -207,7 +207,7 @@ def ocr_image(url):
     except:
         return ""
 
-# EMBEDDING & CLUSTERING
+#text embeddings and clustering using Doc2Vec and KMeans
 
 def embed_and_cluster(records):
     texts = [r["cleaned_text"] + " " + r["image_ocr_text"] for r in records]
@@ -229,7 +229,7 @@ def embed_and_cluster(records):
         r["embedding"] = pickle.dumps(embeddings[i])
         r["cluster_id"] = int(labels[i])
 
-# MAIN PIPELINe
+#main pipeline to run the entire process - scrape, ocr, embed, cluster, and store in DB
 
 def run_pipeline(args):
     conn = get_db_conn(args.db_host, args.db_user, args.db_pass)
@@ -271,7 +271,7 @@ def run_pipeline(args):
     logging.info("Pipeline completed.")
 
 
-# CLI
+#cli to run the scraper and clustering pipeline
 
 def main():
     parser = argparse.ArgumentParser()
