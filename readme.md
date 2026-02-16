@@ -1,0 +1,83 @@
+# DSCI 560 – Lab 5: Reddit Scraper & Clustering System
+
+For this lab, we built a complete pipeline that scrapes Reddit data, cleans it, stores it in a PostgreSQL database, generates embeddings, and clusters similar posts together. The goal was to collect real forum data and organize it in a way that allows meaningful grouping and analysis.
+
+We chose to scrape Reddit using **old.reddit.com** with BeautifulSoup instead of the official API. The Reddit API has strict limits (1000 posts max and time restrictions), so scraping old Reddit allowed us to fetch larger datasets more reliably while still following polite scraping practices (custom User-Agent and request delays).
+
+We selected topic-based subreddits (such as r/tech and r/cybersecurity) to keep the domain focused. This makes clustering more meaningful because posts are still related but contain different subtopics.
+
+The pipeline works as follows:
+
+1. Scraping  
+   The script takes subreddit names and a number of posts as input.  
+   It visits old.reddit.com and follows the “next” button links until the requested number of posts is collected.  
+   Promoted posts and advertisements are filtered out.  
+
+2. Preprocessing  
+   After scraping, we clean the data:
+   - Remove HTML tags
+   - Remove URLs and special characters
+   - Convert text to lowercase
+   - Mask usernames for privacy
+   - Convert timestamps to standard format  
+
+   Some posts contain images (memes). If an image URL is detected, we use Tesseract OCR to extract text from the image and store it in the database as additional content.
+
+3. Database Storage  
+   We used PostgreSQL for storage.  
+   Each post is saved with:
+   - subreddit
+   - title
+   - body
+   - cleaned text
+   - OCR text (if available)
+   - masked author
+   - timestamp
+   - embedding vector (BYTEA format)
+   - cluster ID  
+
+   We use `ON CONFLICT DO NOTHING` to prevent duplicate posts from being inserted.
+
+4. Embeddings  
+   We used Doc2Vec (Gensim) to convert each cleaned post into a 100-dimensional vector.  
+   This transforms raw text into a numerical format that represents semantic meaning.
+
+5. Clustering  
+   We implemented KMeans clustering (hard clustering).  
+   Each post belongs to exactly one cluster.  
+   We chose hard clustering because:
+   - It is simpler to implement and visualize
+   - It works well for grouping related forum posts
+   - It fits the scope of this assignment  
+
+   After clustering, each post is assigned a cluster ID and stored in the database.
+
+6. Automation  
+   The script supports periodic execution using a command-line argument:
+   
+   python old_reddit_scraper.py --interval 5
+
+   This allows the scraper to automatically update the database every X minutes.  
+   When not running continuously, it performs a single scrape-and-process cycle.
+
+Overall, the system:
+- Collects live Reddit data
+- Cleans and preprocesses it
+- Extracts image text
+- Stores everything in PostgreSQL
+- Generates embeddings
+- Clusters similar posts
+- Supports automated updates
+
+This project helped us understand real-world challenges such as API limits, noisy data, advertisements, preprocessing decisions, embedding generation, and clustering strategies.
+
+To run the project:
+1. Install dependencies (see requirements in project folder)
+2. Ensure PostgreSQL is running
+3. Run the script with desired subreddits and number of posts
+
+Example:
+
+python old_reddit_scraper.py --subs tech cybersecurity --num 500 --db-host localhost --db-user postgres --db-pass YOUR_PASSWORD --images
+
+That’s the overall workflow of our Lab 5 system.
