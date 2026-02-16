@@ -60,6 +60,8 @@ The pipeline works as follows:
    This allows the scraper to automatically update the database every X minutes.  
    When not running continuously, it performs a single scrape-and-process cycle.
 
+---
+
 Overall, the system:
 - Collects live Reddit data
 - Cleans and preprocesses it
@@ -69,12 +71,16 @@ Overall, the system:
 - Clusters similar posts
 - Supports automated updates
 
+---
+
 This project helped us understand real-world challenges such as API limits, noisy data, advertisements, preprocessing decisions, embedding generation, and clustering strategies.
 
 To run the project:
 1. Install dependencies (see requirements in project folder)
 2. Ensure PostgreSQL is running
 3. Run the script with desired subreddits and number of posts
+   
+---
 
 Example:
 
