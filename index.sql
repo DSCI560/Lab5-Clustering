@@ -1,0 +1,1 @@
+CREATE INDEX idx_subreddit ON posts(subreddit);
