@@ -275,7 +275,7 @@ def run_pipeline(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--subs", nargs="+", default=["technology", "technews", "tech", "netsec", "windowssecurity"])
+    parser.add_argument("--subs", nargs="+", default=["technology", "technews", "tech", "netsec", "windowssecurity","cybersecurity"])
     parser.add_argument("--num", type=int, default=500)
     parser.add_argument("--db-host", required=True)
     parser.add_argument("--db-user", required=True)
