@@ -11,16 +11,21 @@ import pickle
 import logging
 import pytesseract
 import numpy as np
+import matplotlib.pyplot as plt
 
 from PIL import Image
 from io import BytesIO
 from datetime import datetime
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import pairwise_distances_argmin_min
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from tqdm import tqdm
 import nltk
+
 
 # One-time downloads
 import nltk
@@ -49,6 +54,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 #db
 
 def get_db_conn(host, user, password, database='lab5_reddit'):
+    print(f"[DB] Attempting to connect to database '{database}' on host '{host}' as user '{user}'..")
     conn = psycopg2.connect(
         host=host,
         database=database,
@@ -56,6 +62,7 @@ def get_db_conn(host, user, password, database='lab5_reddit'):
         password=password
     )
     conn.autocommit = True
+    print("[DB] Connection successful. Autocommit enabled.")
     return conn
 
 
@@ -66,11 +73,16 @@ def insert_post(conn, record):
     INSERT INTO posts
     (reddit_id, subreddit, title, body, image_url, image_path,
      image_ocr_text, author_masked, created_utc, raw_html,
-     cleaned_text, embedding, cluster_id)
+     cleaned_text, embedding, cluster_id, keywords, distance_to_centroid)
     VALUES (%s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
-            %s, %s, %s)
-    ON CONFLICT (reddit_id) DO NOTHING
+            %s, %s, %s, %s, %s)
+    ON CONFLICT (reddit_id) DO UPDATE SET
+        keywords = EXCLUDED.keywords,
+        distance_to_centroid = EXCLUDED.distance_to_centroid,
+        cluster_id = EXCLUDED.cluster_id,
+        embedding = EXCLUDED.embedding
+
     """
 
     cursor.execute(sql, (
@@ -86,21 +98,53 @@ def insert_post(conn, record):
         record['raw_html'],
         record['cleaned_text'],
         record['embedding'],
-        record['cluster_id']
+        record['cluster_id'],
+        record.get('keywords'),
+        record.get('distance_to_centroid')
     ))
 
     cursor.close()
 
+
 #Scraping old reddit
 
-def safe_get(url):
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        return r
-    except Exception as e:
-        logging.warning(f"Request failed: {e}")
-        return None
+def safe_get(url, max_retries=5):
+    attempt = 0
+    backoff = 2
+
+    while attempt < max_retries:
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=15)
+
+            if r.status_code == 429:
+                sleep_time = backoff ** attempt
+                logging.warning(f"Rate limited (429). Sleeping for {sleep_time} seconds.")
+                time.sleep(sleep_time)
+                attempt += 1
+                continue
+
+            r.raise_for_status()
+            return r
+
+        except requests.exceptions.RequestException as e:
+            sleep_time = backoff ** attempt
+            logging.warning(f"Request failed: {e}. Retrying in {sleep_time} seconds.")
+            time.sleep(sleep_time)
+            attempt += 1
+
+    logging.error("Max retries exceeded. Skipping this page.")
+    return None
+
+    
+def create_distance_index(conn):
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_distance_to_centroid
+        ON posts(distance_to_centroid);
+    """)
+    conn.commit()
+    cursor.close()
+
 
 
 def is_promoted(div):
@@ -185,13 +229,16 @@ def scrape_subreddit(subreddit, max_posts):
                 "image_url": image_url,
                 "raw_html": str(div)
             })
+            print(f"Collected {len(posts)} posts so far from r/{subreddit}")
 
         next_btn = soup.find("span", class_="next-button")
+        print("Moving to next page...")
         if next_btn and next_btn.find("a"):
             url = next_btn.find("a")["href"]
-            time.sleep(2)
+            time.sleep(2 + np.random.uniform(0, 1)) #adding in random jitter for avoiding bot-like timimgs.
         else:
             break
+    print(f"Finished r/{subreddit}. Total posts collected: {len(posts)}")
 
     return posts
 
@@ -217,17 +264,132 @@ def embed_and_cluster(records):
 
     model = Doc2Vec(vector_size=100, min_count=2, epochs=20)
     model.build_vocab(tagged)
+    print(f"Training on {len(records)} documents")
     model.train(tagged, total_examples=model.corpus_count, epochs=model.epochs)
+    model.save("doc2vec_model.model")
+    print("Doc2Vec model saved to disk.")
+
 
     embeddings = np.array([model.infer_vector(tokenize(t)) for t in texts])
+    print("Embeddinggs generated!")
 
     k = min(10, max(2, len(records)//50))
     kmeans = KMeans(n_clusters=k, n_init=10)
+    print(f"Number of clusters chosen: {k}")
     labels = kmeans.fit_predict(embeddings)
+    print("Clustering complete.")
+
+    centroids = kmeans.cluster_centers_
+
+    # Keyword extraction using TF-IDF
+    vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
+    tfidf_matrix = vectorizer.fit_transform(texts)
+    feature_names = vectorizer.get_feature_names_out()
+
+    cluster_keywords = {}
+
+    for cluster_id in range(k):
+        indices = np.where(labels == cluster_id)[0]
+        cluster_tfidf = tfidf_matrix[indices]
+        mean_tfidf = np.asarray(cluster_tfidf.mean(axis=0)).flatten()
+        top_indices = mean_tfidf.argsort()[-5:][::-1]
+        keywords = [feature_names[i] for i in top_indices]
+        cluster_keywords[cluster_id] = keywords
+        # Visualize top keywords per cluster
+    for cluster_id, keywords in cluster_keywords.items():
+        plt.figure()
+        values = []
+        indices = np.where(labels == cluster_id)[0]
+        cluster_tfidf = tfidf_matrix[indices]
+        mean_tfidf = np.asarray(cluster_tfidf.mean(axis=0)).flatten()
+
+        for word in keywords:
+            idx = np.where(feature_names == word)[0][0]
+            values.append(mean_tfidf[idx])
+
+        plt.bar(keywords, values)
+        plt.title(f"Top Keywords - Cluster {cluster_id}")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(f"cluster_plot_{cluster_id}.png")
+        plt.close()
+
+
+    # Find representative posts (closest to centroid)
+    closest, distances = pairwise_distances_argmin_min(centroids, embeddings)
+
+    print("Representative posts per cluster:")
+    for cluster_id, index in enumerate(closest):
+        print(f"Cluster {cluster_id}: {records[index]['title'][:100]}")
+
+    # Visualization using PCA
+    pca = PCA(n_components=2)
+    reduced = pca.fit_transform(embeddings)
+
+    plt.figure()
+    for cluster_id in range(k):
+        cluster_points = reduced[labels == cluster_id]
+        plt.scatter(cluster_points[:, 0], cluster_points[:, 1], label=f"Cluster {cluster_id}")
+    plt.legend()
+    plt.title("Cluster Visualization (PCA)")
+    plt.savefig("cluster_visualization.png")
+    plt.close()
 
     for i, r in enumerate(records):
         r["embedding"] = pickle.dumps(embeddings[i])
         r["cluster_id"] = int(labels[i])
+        r["keywords"] = ", ".join(cluster_keywords[labels[i]])
+        r["distance_to_centroid"] = float(np.linalg.norm(embeddings[i] - centroids[labels[i]]))
+
+
+def interactive_query(conn):
+    print("Entering interactive query mode. Type 'exit' to quit.")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT embedding, cluster_id FROM posts")
+    rows = cursor.fetchall()
+
+    if not rows:
+        print("No data available.")
+        return
+
+    embeddings = []
+    cluster_ids = []
+
+    for row in rows:
+        embeddings.append(pickle.loads(row[0]))
+        cluster_ids.append(row[1])
+
+    embeddings = np.array(embeddings)
+    model = Doc2Vec.load("doc2vec_model.model")
+
+    while True:
+        query = input("Enter keywords or message: ")
+        if query.lower() == "exit":
+            break
+
+        cleaned = clean_text(query)
+        tokens = tokenize(cleaned)
+        if not tokens:
+            continue
+        
+        query_vec = model.infer_vector(tokens)
+        distances = np.linalg.norm(embeddings - query_vec, axis=1)
+        closest_index = np.argmin(distances)
+        cluster_match = cluster_ids[closest_index]
+
+        print(f"Closest cluster: {cluster_match}")
+
+        cursor.execute("SELECT title, keywords FROM posts WHERE cluster_id=%s LIMIT 5", (cluster_match,))
+        results = cursor.fetchall()
+
+        for title, keywords in results:
+            print(f"- {title}")
+            print(f"  Keywords: {keywords}")
+
+    cursor.close()
+
+
 
 #main pipeline to run the entire process - scrape, ocr, embed, cluster, and store in DB
 
@@ -243,6 +405,8 @@ def run_pipeline(args):
     records = []
 
     for p in tqdm(all_posts):
+        print(f"\nWorking on post {p['reddit_id']}")
+        print(f"Title: {p['title'][:80]}...")
         cleaned = clean_text(p["title"] + " " + p["body_html"])
         image_ocr = ocr_image(p["image_url"]) if args.images and p["image_url"] else ""
 
@@ -267,6 +431,8 @@ def run_pipeline(args):
 
         for r in records:
             insert_post(conn, r)
+            create_distance_index(conn)
+
 
     logging.info("Pipeline completed.")
 
@@ -291,6 +457,8 @@ def main():
             time.sleep(args.interval * 60)
     else:
         run_pipeline(args)
+        conn = get_db_conn(args.db_host, args.db_user, args.db_pass)
+        interactive_query(conn)
 
 
 if __name__ == "__main__":

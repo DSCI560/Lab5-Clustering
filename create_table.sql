@@ -1,3 +1,4 @@
+-- Active: 1771389284205@@127.0.0.1@5432@lab5_reddit@public
 CREATE TABLE posts (
     id SERIAL PRIMARY KEY,
     reddit_id VARCHAR(50) UNIQUE,
