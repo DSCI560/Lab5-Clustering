@@ -374,9 +374,21 @@ def interactive_query(conn):
             continue
         
         query_vec = model.infer_vector(tokens)
-        distances = np.linalg.norm(embeddings - query_vec, axis=1)
-        closest_index = np.argmin(distances)
-        cluster_match = cluster_ids[closest_index]
+        unique_clusters = list(set(cluster_ids))
+        centroids = []
+
+        for cid in unique_clusters:
+            cluster_vectors = embeddings[np.array(cluster_ids) == cid]
+            centroid = np.mean(cluster_vectors, axis=0)
+            centroids.append((cid, centroid))
+
+        # Compare query to centroids
+        centroid_distances = [
+            (cid, np.linalg.norm(query_vec - centroid))
+            for cid, centroid in centroids
+        ]
+
+        cluster_match = min(centroid_distances, key=lambda x: x[1])[0]
 
         print(f"Closest cluster: {cluster_match}")
 
